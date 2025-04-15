@@ -8,11 +8,27 @@ from scipy.sparse import hstack, csr_matrix
 from nltk.corpus import stopwords
 from nltk.stem import WordNetLemmatizer
 import nltk
+import gdown
+import os
 
 # Download required NLTK data
 nltk.download('stopwords')
 nltk.download('wordnet')
 nltk.download('omw-1.4')
+
+# Download model and encoder files from Google Drive
+@st.cache_resource
+def download_files():
+    file_urls = {
+        'fraud_detection_model.pkl': 'YOUR_GOOGLE_DRIVE_URL_MODEL',
+        'tfidf_vectorizer.pkl': 'YOUR_GOOGLE_DRIVE_URL_TFIDF',
+        'one_hot_encoder.pkl': 'YOUR_GOOGLE_DRIVE_URL_OHE'
+    }
+    for file_name, url in file_urls.items():
+        if not os.path.exists(file_name):
+            gdown.download(url, file_name, quiet=False)
+
+download_files()
 
 # Load the saved model, TF-IDF vectorizer, and OneHotEncoder
 try:
@@ -20,7 +36,7 @@ try:
     tfidf = pickle.load(open('tfidf_vectorizer.pkl', 'rb'))
     ohe = pickle.load(open('one_hot_encoder.pkl', 'rb'))
 except FileNotFoundError:
-    st.error("Model or encoder files not found. Please ensure 'fraud_detection_model.pkl', 'tfidf_vectorizer.pkl', and 'one_hot_encoder.pkl' are in the app directory.")
+    st.error("Model or encoder files not found. Please ensure the files are downloaded correctly.")
     st.stop()
 
 # Initialize NLTK components
@@ -29,17 +45,12 @@ lemmatizer = WordNetLemmatizer()
 
 # Define text cleaning function
 def clean_text(text):
-    # Remove URLs
     text = re.sub(r'http\S+|www.\S+', '', text)
-    # Remove digits and punctuation
     text = re.sub(r'[\d]+', '', text)
     text = text.translate(str.maketrans('', '', string.punctuation))
-    # Remove newlines and extra spaces
     text = text.replace('\n', ' ').replace('\r', ' ')
     text = re.sub(r'\s+', ' ', text)
-    # Convert to lowercase
     text = text.lower()
-    # Remove stopwords and lemmatize
     words = text.split()
     filtered_words = [lemmatizer.lemmatize(word) for word in words if word not in stop_words]
     return ' '.join(filtered_words)
@@ -78,7 +89,6 @@ if submitted:
     if not (title or location or description or requirements or company_profile):
         st.warning("Please provide at least one text field (e.g., Job Title, Description).")
     else:
-        # Prepare input data
         input_data = {
             'title': title if title else '',
             'location': location if location else '',
@@ -91,10 +101,7 @@ if submitted:
             'salary': salary
         }
 
-        # Create DataFrame
         df_input = pd.DataFrame([input_data])
-
-        # Process salary
         df_input['median_salary'] = df_input['salary'].apply(get_median_salary)
         min_salary = df_input['median_salary'].min()
         max_salary = df_input['median_salary'].max()
@@ -104,12 +111,10 @@ if submitted:
             df_input['normalized_salary'] = 0
         df_input = df_input.drop(['salary', 'median_salary'], axis=1)
 
-        # Clean text features
         text_features = ['title', 'location', 'description', 'requirements', 'company_profile']
         for col in text_features:
             df_input[col] = df_input[col].astype(str).apply(clean_text)
 
-        # Combine text features
         df_input['combined_text'] = (
             df_input['title'] + ' ' +
             df_input['location'] + ' ' +
@@ -119,23 +124,13 @@ if submitted:
         )
         df_input['combined_text'] = df_input['combined_text'].apply(clean_text)
 
-        # Vectorize text
         X_text = tfidf.transform(df_input['combined_text'])
-
-        # Encode categorical features
         cat_features = ['employment_type', 'industry', 'department']
         X_cat = ohe.transform(df_input[cat_features])
-
-        # Numeric features
         X_num = csr_matrix(df_input[['normalized_salary']].values)
-
-        # Combine features
         X_final = hstack([X_text, X_cat, X_num])
 
-        # Make prediction
         prediction = model.predict(X_final)[0]
-
-        # Display result
         st.subheader("Prediction Result")
         if prediction == 1:
             st.error("⚠️ This job posting is predicted to be **Fraudulent**.")
@@ -144,4 +139,4 @@ if submitted:
 
 # Footer
 st.markdown("---")
-st.markdown("Developed by Team: N. VSNSPS PRANAVI, B. ROHINI SANKARI, J. YASWITHA, M. LILLY, B. GOWTHAMI BAI")
+st.markdown("Developed by Team: N. VSNSPS PRANAVI, B. ROHINI SANKARI, J. YASWITHA, M. LILLY, B. GAUTAMI BAI")
