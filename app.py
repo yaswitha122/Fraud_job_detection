@@ -115,5 +115,6 @@ if submit_button:
     prediction = model.predict(X_final)[0]
     result = 'Fraudulent' if prediction == 1 else 'Legitimate'
 
-    # Display result
-    st.success(f"The job posting is predicted to be: **{result}**")
+    # Display result with color
+    color = 'red' if result == 'Fraudulent' else 'green'
+    st.markdown(f"<h3 style='color: {color};'>The job posting is predicted to be: <strong>{result}</strong></h3>", unsafe_allow_html=True)
