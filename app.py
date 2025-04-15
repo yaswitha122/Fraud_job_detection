@@ -4,58 +4,45 @@ import numpy as np
 import re
 import string
 import pickle
-from scipy.sparse import hstack, csr_matrix
+import nltk
 from nltk.corpus import stopwords
 from nltk.stem import WordNetLemmatizer
-import nltk
-import gdown
-import os
+from scipy.sparse import hstack, csr_matrix
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.preprocessing import OneHotEncoder
 
-# Download required NLTK data
+# Download NLTK data
 nltk.download('stopwords')
 nltk.download('wordnet')
 nltk.download('omw-1.4')
 
-# Download model and encoder files from Google Drive
-@st.cache_resource
-def download_files():
-    file_urls = {
-        'fraud_detection_model.pkl': 'YOUR_GOOGLE_DRIVE_URL_MODEL',
-        'tfidf_vectorizer.pkl': 'YOUR_GOOGLE_DRIVE_URL_TFIDF',
-        'one_hot_encoder.pkl': 'YOUR_GOOGLE_DRIVE_URL_OHE'
-    }
-    for file_name, url in file_urls.items():
-        if not os.path.exists(file_name):
-            gdown.download(url, file_name, quiet=False)
-
-download_files()
-
-# Load the saved model, TF-IDF vectorizer, and OneHotEncoder
-try:
-    model = pickle.load(open('fraud_detection_model.pkl', 'rb'))
-    tfidf = pickle.load(open('tfidf_vectorizer.pkl', 'rb'))
-    ohe = pickle.load(open('one_hot_encoder.pkl', 'rb'))
-except FileNotFoundError:
-    st.error("Model or encoder files not found. Please ensure the files are downloaded correctly.")
-    st.stop()
-
-# Initialize NLTK components
+# Initialize NLTK tools
 stop_words = set(stopwords.words('english'))
 lemmatizer = WordNetLemmatizer()
 
+# Load saved model and preprocessors
+@st.cache_resource
+def load_model_and_preprocessors():
+    model = pickle.load(open('fraud_detection_model.pkl', 'rb'))
+    tfidf = pickle.load(open('tfidf_vectorizer.pkl', 'rb'))
+    ohe = pickle.load(open('one_hot_encoder.pkl', 'rb'))
+    return model, tfidf, ohe
+
+model, tfidf, ohe = load_model_and_preprocessors()
+
 # Define text cleaning function
 def clean_text(text):
-    text = re.sub(r'http\S+|www.\S+', '', text)
-    text = re.sub(r'[\d]+', '', text)
-    text = text.translate(str.maketrans('', '', string.punctuation))
-    text = text.replace('\n', ' ').replace('\r', ' ')
-    text = re.sub(r'\s+', ' ', text)
-    text = text.lower()
+    text = re.sub(r'http\S+|www.\S+', '', text)  # Remove URLs
+    text = re.sub(r'[\d]+', '', text)  # Remove digits
+    text = text.translate(str.maketrans('', '', string.punctuation))  # Remove punctuation
+    text = text.replace('\n', ' ').replace('\r', ' ')  # Remove newlines
+    text = re.sub(r'\s+', ' ', text)  # Remove extra spaces
+    text = text.lower()  # Convert to lowercase
     words = text.split()
     filtered_words = [lemmatizer.lemmatize(word) for word in words if word not in stop_words]
     return ' '.join(filtered_words)
 
-# Define function to calculate median salary
+# Define salary processing function
 def get_median_salary(salary):
     try:
         low, high = map(int, salary.split('-'))
@@ -63,80 +50,88 @@ def get_median_salary(salary):
     except:
         return 0
 
+def normalize_salary(median_salary):
+    # Use fixed min/max from training data to avoid recalculating
+    min_salary = 0  # Adjust based on your training data if needed
+    max_salary = 1000000  # Adjust based on your training data if needed
+    if median_salary == 0:
+        return 0
+    return (median_salary - min_salary) / (max_salary - min_salary)
+
 # Streamlit app
 st.title("Fraudulent Job Post Detection")
-st.markdown("""
-This application predicts whether a job posting is fraudulent based on its details.
-Enter the job posting information below and click **Predict** to see the result.
-""")
+st.write("Enter job posting details to check if it's fraudulent or legitimate.")
 
 # Input form
-with st.form("job_post_form"):
+with st.form(key='job_form'):
+    st.subheader("Job Details")
     title = st.text_input("Job Title", placeholder="e.g., Software Engineer")
     location = st.text_input("Location", placeholder="e.g., New York, NY")
-    description = st.text_area("Job Description", placeholder="Enter the job description")
-    requirements = st.text_area("Requirements", placeholder="Enter the job requirements")
-    company_profile = st.text_area("Company Profile", placeholder="Enter the company profile")
-    employment_type = st.selectbox("Employment Type", options=["Full-time", "Part-time", "Contract", "Temporary", "Unknown"])
+    description = st.text_area("Job Description", placeholder="e.g., We are looking for a skilled engineer...")
+    requirements = st.text_area("Requirements", placeholder="e.g., 5+ years of experience...")
+    company_profile = st.text_area("Company Profile", placeholder="e.g., We are a leading tech company...")
+
+    st.subheader("Additional Details")
+    employment_type = st.selectbox("Employment Type", options=['Unknown', 'Full-time', 'Part-time', 'Contract', 'Temporary', 'Other'])
     industry = st.text_input("Industry", placeholder="e.g., Information Technology")
     department = st.text_input("Department", placeholder="e.g., Engineering")
     salary = st.text_input("Salary Range (e.g., 50000-70000)", placeholder="e.g., 50000-70000")
 
-    submitted = st.form_submit_button("Predict")
+    submit_button = st.form_submit_button(label="Predict")
 
 # Process input and make prediction
-if submitted:
-    if not (title or location or description or requirements or company_profile):
-        st.warning("Please provide at least one text field (e.g., Job Title, Description).")
+if submit_button:
+    if not all([title, location, description, requirements, company_profile, employment_type, industry, department]):
+        st.error("Please fill in all required fields.")
     else:
-        input_data = {
-            'title': title if title else '',
-            'location': location if location else '',
-            'description': description if description else '',
-            'requirements': requirements if requirements else '',
-            'company_profile': company_profile if company_profile else '',
-            'employment_type': employment_type,
-            'industry': industry if industry else 'Unknown',
-            'department': department if department else 'Unknown',
-            'salary': salary
-        }
+        # Create DataFrame for input
+        input_data = pd.DataFrame({
+            'title': [title],
+            'location': [location],
+            'description': [description],
+            'requirements': [requirements],
+            'company_profile': [company_profile],
+            'employment_type': [employment_type],
+            'industry': [industry],
+            'department': [department],
+            'salary': [salary]
+        })
 
-        df_input = pd.DataFrame([input_data])
-        df_input['median_salary'] = df_input['salary'].apply(get_median_salary)
-        min_salary = df_input['median_salary'].min()
-        max_salary = df_input['median_salary'].max()
-        if max_salary > min_salary:
-            df_input['normalized_salary'] = (df_input['median_salary'] - min_salary) / (max_salary - min_salary)
-        else:
-            df_input['normalized_salary'] = 0
-        df_input = df_input.drop(['salary', 'median_salary'], axis=1)
+        # Process salary
+        median_salary = get_median_salary(salary)
+        normalized_salary = normalize_salary(median_salary)
+        input_data['normalized_salary'] = normalized_salary
+        input_data = input_data.drop('salary', axis=1)
 
+        # Clean text features
         text_features = ['title', 'location', 'description', 'requirements', 'company_profile']
         for col in text_features:
-            df_input[col] = df_input[col].astype(str).apply(clean_text)
+            input_data[col] = input_data[col].apply(clean_text)
 
-        df_input['combined_text'] = (
-            df_input['title'] + ' ' +
-            df_input['location'] + ' ' +
-            df_input['description'] + ' ' +
-            df_input['requirements'] + ' ' +
-            df_input['company_profile']
-        )
-        df_input['combined_text'] = df_input['combined_text'].apply(clean_text)
+        # Transform text features with TF-IDF
+        text_vectors = [tfidf.transform(input_data[col]) for col in text_features]
+        X_text = hstack(text_vectors)
 
-        X_text = tfidf.transform(df_input['combined_text'])
+        # Encode categorical features
         cat_features = ['employment_type', 'industry', 'department']
-        X_cat = ohe.transform(df_input[cat_features])
-        X_num = csr_matrix(df_input[['normalized_salary']].values)
+        X_cat = ohe.transform(input_data[cat_features])
+
+        # Prepare numerical feature
+        X_num = csr_matrix(input_data[['normalized_salary']].values)
+
+        # Combine features
         X_final = hstack([X_text, X_cat, X_num])
 
+        # Make prediction
         prediction = model.predict(X_final)[0]
-        st.subheader("Prediction Result")
-        if prediction == 1:
-            st.error("⚠️ This job posting is predicted to be **Fraudulent**.")
-        else:
-            st.success("✅ This job posting is predicted to be **Legitimate**.")
+        probability = model.predict_proba(X_final)[0] if hasattr(model, 'predict_proba') else None
 
-# Footer
-st.markdown("---")
-st.markdown("Developed by Team: N. VSNSPS PRANAVI, B. ROHINI SANKARI, J. YASWITHA, M. LILLY, B. GAUTAMI BAI")
+        # Display result
+        st.subheader("Prediction Result")
+        if prediction == 0:
+            st.success("This job posting is predicted to be **Legitimate**.")
+        else:
+            st.error("This job posting is predicted to be **Fraudulent**.")
+        
+        if probability is not None:
+            st.write(f"Confidence: {probability[prediction]*100:.2f}%")
